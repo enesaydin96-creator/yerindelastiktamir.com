@@ -1778,15 +1778,30 @@ tick();setInterval(tick,30000);
 
 // ========== INTERACTIVE LOCATOR ==========
 // Bölge verileri — Lokman Hekim Cd. No:122, Darıca (40.7847, 29.3778) merkez alındı
+// bbox: [southLat, westLng, northLat, eastLng] — ilçe sınırlarının yaklaşık bounding box'ı
 const REGIONS = [
-  { slug:'darica',   name:'Darıca',   region:'Kocaeli',         tag:'ko', lat:40.7659, lng:29.3789, min:8,  max:13 },
-  { slug:'cayirova', name:'Çayırova', region:'Kocaeli',         tag:'ko', lat:40.8138, lng:29.3811, min:10, max:15 },
-  { slug:'gebze',    name:'Gebze',    region:'Kocaeli',         tag:'ko', lat:40.7986, lng:29.4308, min:12, max:25 },
-  { slug:'tuzla',    name:'Tuzla',    region:'Anadolu Yakası',  tag:'ay', lat:40.8265, lng:29.3027, min:17, max:25 },
-  { slug:'dilovasi', name:'Dilovası', region:'Kocaeli',         tag:'ko', lat:40.7728, lng:29.5306, min:25, max:35 },
-  { slug:'pendik',   name:'Pendik',   region:'Anadolu Yakası',  tag:'ay', lat:40.8775, lng:29.2592, min:28, max:40 },
-  { slug:'kartal',   name:'Kartal',   region:'Anadolu Yakası',  tag:'ay', lat:40.8997, lng:29.1864, min:38, max:55 },
-  { slug:'maltepe',  name:'Maltepe',  region:'Anadolu Yakası',  tag:'ay', lat:40.9352, lng:29.1547, min:45, max:60 },
+  { slug:'darica',   name:'Darıca',   region:'Kocaeli',         tag:'ko', lat:40.7659, lng:29.3789, min:8,  max:13, bbox:[40.745, 29.345, 40.795, 29.420] },
+  { slug:'cayirova', name:'Çayırova', region:'Kocaeli',         tag:'ko', lat:40.8138, lng:29.3811, min:10, max:15, bbox:[40.795, 29.345, 40.860, 29.430] },
+  { slug:'gebze',    name:'Gebze',    region:'Kocaeli',         tag:'ko', lat:40.7986, lng:29.4308, min:12, max:25, bbox:[40.745, 29.420, 40.880, 29.500] },
+  { slug:'tuzla',    name:'Tuzla',    region:'Anadolu Yakası',  tag:'ay', lat:40.8265, lng:29.3027, min:17, max:25, bbox:[40.800, 29.260, 40.890, 29.345] },
+  { slug:'dilovasi', name:'Dilovası', region:'Kocaeli',         tag:'ko', lat:40.7728, lng:29.5306, min:25, max:35, bbox:[40.745, 29.500, 40.835, 29.580] },
+  { slug:'pendik',   name:'Pendik',   region:'Anadolu Yakası',  tag:'ay', lat:40.8775, lng:29.2592, min:28, max:40, bbox:[40.840, 29.220, 40.940, 29.330] },
+  { slug:'kartal',   name:'Kartal',   region:'Anadolu Yakası',  tag:'ay', lat:40.8997, lng:29.1864, min:38, max:55, bbox:[40.870, 29.145, 40.940, 29.225] },
+  { slug:'maltepe',  name:'Maltepe',  region:'Anadolu Yakası',  tag:'ay', lat:40.9352, lng:29.1547, min:45, max:60, bbox:[40.910, 29.105, 40.965, 29.180] },
+];
+
+// İlçe etiketleri — bunlar bizim hizmet vermediğimiz ama "kapsam dışı" mesajında daha açıklayıcı olmak için
+// Adana, Ankara, İzmir gibi şehirler genel "kapsam dışı" olarak gidecek
+// Ama Kadıköy, Üsküdar, Beşiktaş gibi yakın ama bizim bölgemizde olmayan yerler için özel mesaj çıkar
+const NEAR_BUT_OUTSIDE = [
+  { name:'Kadıköy',     bbox:[40.960, 29.020, 41.005, 29.120] },
+  { name:'Ataşehir',    bbox:[40.965, 29.075, 41.020, 29.180] },
+  { name:'Ümraniye',    bbox:[41.000, 29.080, 41.060, 29.200] },
+  { name:'Üsküdar',     bbox:[41.010, 29.000, 41.060, 29.080] },
+  { name:'Sancaktepe',  bbox:[40.990, 29.190, 41.040, 29.290] },
+  { name:'Çekmeköy',    bbox:[41.020, 29.180, 41.080, 29.310] },
+  { name:'Sultanbeyli', bbox:[40.940, 29.240, 40.985, 29.310] },
+  { name:'Şile',        bbox:[41.150, 29.500, 41.220, 29.700] },
 ];
 
 // Haversine distance — km
@@ -1797,25 +1812,52 @@ function haversine(lat1,lng1,lat2,lng2){
   return 2*R*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
 }
 
-// Verilen koordinata en yakın bölgeyi bul (mesafeyle birlikte)
-function findNearestRegion(lat,lng){
+// Koordinatın bbox içinde olup olmadığını kontrol et
+function inBbox(lat,lng,bbox){
+  return lat>=bbox[0] && lat<=bbox[2] && lng>=bbox[1] && lng<=bbox[3];
+}
+
+// Verilen koordinattan hizmet ettiğimiz bölgeyi tespit et
+// 1) Önce bbox kontrolü: hangi ilçe sınırlarında?
+// 2) Yoksa "yakın ama bölgemizde değil" listesi (Kadıköy, Üsküdar, vb.)
+// 3) Yoksa kuş uçuşu mesafe kontrolü — uzaksa kapsam dışı
+function detectLocation(lat,lng){
+  // 1) Hizmet bölgemizde mi?
+  for(const r of REGIONS){
+    if(inBbox(lat,lng,r.bbox)){
+      return {type:'in-coverage', region:r};
+    }
+  }
+  // 2) Yakın ama bizim bölgemizde değil mi?
+  for(const n of NEAR_BUT_OUTSIDE){
+    if(inBbox(lat,lng,n.bbox)){
+      // En yakın bölgeyi bulup mesafeyi de döndür
+      let nearest=REGIONS[0],minDist=Infinity;
+      REGIONS.forEach(r=>{
+        const d=haversine(lat,lng,r.lat,r.lng);
+        if(d<minDist){minDist=d;nearest=r;}
+      });
+      return {type:'near-outside', district:n.name, distance:minDist};
+    }
+  }
+  // 3) En yakın bölgeye olan mesafe — uzaksa kapsam dışı
   let nearest=REGIONS[0],minDist=Infinity;
   REGIONS.forEach(r=>{
     const d=haversine(lat,lng,r.lat,r.lng);
     if(d<minDist){minDist=d;nearest=r;}
   });
-  return {region:nearest, distance:minDist};
+  if(minDist>50){
+    return {type:'far-outside', distance:minDist};
+  }
+  // 4) Sınır bölgesi ama bbox eşleşmedi — en yakın bölgeyi öner ama uyar
+  return {type:'edge', region:nearest, distance:minDist};
 }
 
-// KAPSAM SINIRI: en yakın bölgeye 80 km'den fazla mesafedeyse kapsam dışı
-// (İstanbul Anadolu Yakası ve Kocaeli sınırlarını içeren güvenli sınır)
-const COVERAGE_LIMIT_KM = 80;
-
-// Sonuç ekranını göster
+// Sonuç ekranını göster — bölge tespit edildiyse
 function showResult(region,fromGPS=false){
   const result=document.getElementById('locatorResult');
   result.classList.remove('out-of-coverage');
-  document.getElementById('resultStatus').textContent=fromGPS?'Konumun bulundu — sana en yakın bölge':'Bölge seçildi';
+  document.getElementById('resultStatus').textContent=fromGPS?'Konumun bulundu — '+region.name+' bölgesindesin':'Bölge seçildi';
   document.getElementById('resultZone').textContent=region.name+' · '+region.region;
   document.getElementById('resultTime').innerHTML=region.min+'-'+region.max+' <span class="unit">dakika içinde</span>';
   document.getElementById('resultRoute').textContent='Lokman Hekim Cd., Darıca → '+region.name;
@@ -1826,12 +1868,12 @@ function showResult(region,fromGPS=false){
   setTimeout(()=>result.scrollIntoView({behavior:'smooth',block:'nearest'}),100);
 }
 
-// Kapsam dışı sonuç ekranı
+// Kapsam dışı sonuç ekranı (uzak şehir — Adana, Ankara, vb.)
 function showOutOfCoverage(distanceKm){
   const result=document.getElementById('locatorResult');
   result.classList.add('out-of-coverage');
   document.getElementById('resultStatus').textContent='Konumun kapsama alanımız dışında';
-  document.getElementById('resultZone').textContent='Hizmet bölgesi: İstanbul Anadolu Yakası &amp; Kocaeli';
+  document.getElementById('resultZone').textContent='Hizmet bölgesi: İstanbul Anadolu Yakası & Kocaeli';
   document.getElementById('resultTime').innerHTML='Kapsam <span class="unit">dışı</span>';
   document.getElementById('resultRoute').textContent='Konumun merkezimizden ~'+Math.round(distanceKm)+' km uzaklıkta. Hizmet bölgemiz Tuzla, Pendik, Kartal, Maltepe, Darıca, Çayırova, Gebze ve Dilovası ilçeleridir.';
   document.getElementById('resultDetail').style.display='none';
@@ -1840,31 +1882,73 @@ function showOutOfCoverage(distanceKm){
   setTimeout(()=>result.scrollIntoView({behavior:'smooth',block:'nearest'}),100);
 }
 
+// "Yakın ama bölgemizde değil" mesajı (Kadıköy, Üsküdar, Ataşehir vb.)
+function showNearOutside(district,distanceKm){
+  const result=document.getElementById('locatorResult');
+  result.classList.add('out-of-coverage');
+  document.getElementById('resultStatus').textContent='Maalesef '+district+' hizmet bölgemizde değil';
+  document.getElementById('resultZone').textContent=district+' · İstanbul';
+  document.getElementById('resultTime').innerHTML='Kapsam <span class="unit">dışı</span>';
+  document.getElementById('resultRoute').textContent=district+' bizim hizmet sınırımızın dışında. En yakın hizmet bölgemiz: Maltepe (45-60 dk). Daha çok bilgi için bizi arayabilirsin.';
+  document.getElementById('resultDetail').style.display='none';
+  document.getElementById('resultWa').setAttribute('href','https://wa.me/905515023060?text='+encodeURIComponent('Merhaba, '+district+' bölgesinden konum aldım. Hizmet alabilir miyim?'));
+  result.classList.add('show');
+  setTimeout(()=>result.scrollIntoView({behavior:'smooth',block:'nearest'}),100);
+}
+
 // ===== GPS button =====
 const gpsBtn=document.getElementById('gpsBtn');
+
+// GPS hata mesajı için yardımcı — kullanıcı reddederse veya hata olursa açık mesaj
+function showGpsError(msg){
+  const result=document.getElementById('locatorResult');
+  result.classList.add('out-of-coverage');
+  document.getElementById('resultStatus').textContent='Konum alınamadı';
+  document.getElementById('resultZone').textContent='Manuel seçim yap';
+  document.getElementById('resultTime').innerHTML='— <span class="unit">— —</span>';
+  document.getElementById('resultRoute').textContent=msg+' Lütfen aşağıdaki dropdown\'dan bölgeni manuel seç.';
+  document.getElementById('resultDetail').style.display='none';
+  document.getElementById('resultWa').setAttribute('href','https://wa.me/905515023060');
+  result.classList.add('show');
+  document.getElementById('dropdownWrap').classList.add('open');
+  setTimeout(()=>result.scrollIntoView({behavior:'smooth',block:'nearest'}),100);
+}
+
 if(gpsBtn){
   gpsBtn.addEventListener('click',()=>{
     if(!navigator.geolocation){
-      alert('Tarayıcın konum hizmetini desteklemiyor. Lütfen bölgeni manuel seç.');
+      showGpsError('Tarayıcın konum hizmetini desteklemiyor.');
       return;
     }
     gpsBtn.classList.add('loading');
     navigator.geolocation.getCurrentPosition(
       pos=>{
         gpsBtn.classList.remove('loading');
-        const result=findNearestRegion(pos.coords.latitude,pos.coords.longitude);
-        if(result.distance>COVERAGE_LIMIT_KM){
-          showOutOfCoverage(result.distance);
-        }else{
-          showResult(result.region,true);
+        const detection=detectLocation(pos.coords.latitude,pos.coords.longitude);
+
+        // Konsola log — debug için
+        console.log('[Yerinde Lastik] Konum:',pos.coords.latitude,pos.coords.longitude,'Doğruluk:',Math.round(pos.coords.accuracy)+'m','Sonuç:',detection.type);
+
+        if(detection.type==='in-coverage'){
+          showResult(detection.region,true);
+        }else if(detection.type==='near-outside'){
+          showNearOutside(detection.district,detection.distance);
+        }else if(detection.type==='far-outside'){
+          showOutOfCoverage(detection.distance);
+        }else if(detection.type==='edge'){
+          // Sınır bölgesi — en yakın bölgeyi göster ama doğruluğu uyar
+          showResult(detection.region,true);
         }
       },
       err=>{
         gpsBtn.classList.remove('loading');
-        // Sessiz fallback: dropdown'u aç
-        document.getElementById('dropdownWrap').classList.add('open');
+        let msg='Konum izni alınamadı.';
+        if(err.code===1)msg='Konum iznini reddettin. Tarayıcı adres çubuğundaki kilit/kalkan ikonundan izni sıfırlayıp tekrar deneyebilirsin.';
+        else if(err.code===2)msg='Konum servisi şu an çalışmıyor.';
+        else if(err.code===3)msg='Konum bulma süresi aşıldı.';
+        showGpsError(msg);
       },
-      {enableHighAccuracy:true,timeout:10000,maximumAge:0}
+      {enableHighAccuracy:true,timeout:15000,maximumAge:60000}
     );
   });
 }
