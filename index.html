@@ -1903,31 +1903,49 @@ const gpsBtn=document.getElementById('gpsBtn');
 function showGpsError(msg){
   const result=document.getElementById('locatorResult');
   result.classList.add('out-of-coverage');
-  document.getElementById('resultStatus').textContent='Konum alınamadı';
+  result.classList.add('show');
+  document.getElementById('resultStatus').textContent='⚠️ Konum alınamadı';
   document.getElementById('resultZone').textContent='Manuel seçim yap';
   document.getElementById('resultTime').innerHTML='— <span class="unit">— —</span>';
-  document.getElementById('resultRoute').textContent=msg+' Lütfen aşağıdaki dropdown\'dan bölgeni manuel seç.';
+  document.getElementById('resultRoute').textContent=msg+' Aşağıdaki dropdown\'dan bölgeni manuel seçebilirsin.';
   document.getElementById('resultDetail').style.display='none';
   document.getElementById('resultWa').setAttribute('href','https://wa.me/905515023060');
-  result.classList.add('show');
-  document.getElementById('dropdownWrap').classList.add('open');
-  setTimeout(()=>result.scrollIntoView({behavior:'smooth',block:'nearest'}),100);
+  // Önce scroll, sonra dropdown'u flash ile dikkat çek
+  setTimeout(()=>result.scrollIntoView({behavior:'smooth',block:'center'}),100);
+  // 800ms sonra dropdown'u aç (kart görüldükten sonra)
+  setTimeout(()=>document.getElementById('dropdownWrap').classList.add('open'),800);
 }
 
 if(gpsBtn){
-  gpsBtn.addEventListener('click',()=>{
+  gpsBtn.addEventListener('click',async ()=>{
+    console.log('[Yerinde Lastik] GPS button clicked');
+
     if(!navigator.geolocation){
+      console.log('[Yerinde Lastik] Geolocation API yok');
       showGpsError('Tarayıcın konum hizmetini desteklemiyor.');
       return;
     }
+
+    // Önce izin durumunu kontrol et (Permissions API destekleyen tarayıcılarda)
+    if(navigator.permissions && navigator.permissions.query){
+      try{
+        const perm=await navigator.permissions.query({name:'geolocation'});
+        console.log('[Yerinde Lastik] İzin durumu:',perm.state);
+        if(perm.state==='denied'){
+          showGpsError('Konum izni daha önce engellenmiş. Tarayıcı adres çubuğundaki kilit/kalkan ikonuna tıklayıp "Konum" iznini sıfırla, sonra tekrar dene.');
+          return;
+        }
+      }catch(e){console.log('[Yerinde Lastik] Permissions API hatası:',e);}
+    }
+
     gpsBtn.classList.add('loading');
+    console.log('[Yerinde Lastik] Konum isteniyor...');
+
     navigator.geolocation.getCurrentPosition(
       pos=>{
         gpsBtn.classList.remove('loading');
         const detection=detectLocation(pos.coords.latitude,pos.coords.longitude);
-
-        // Konsola log — debug için
-        console.log('[Yerinde Lastik] Konum:',pos.coords.latitude,pos.coords.longitude,'Doğruluk:',Math.round(pos.coords.accuracy)+'m','Sonuç:',detection.type);
+        console.log('[Yerinde Lastik] BAŞARILI - Konum:',pos.coords.latitude,pos.coords.longitude,'Doğruluk:',Math.round(pos.coords.accuracy)+'m','Sonuç:',detection.type);
 
         if(detection.type==='in-coverage'){
           showResult(detection.region,true);
@@ -1936,16 +1954,20 @@ if(gpsBtn){
         }else if(detection.type==='far-outside'){
           showOutOfCoverage(detection.distance);
         }else if(detection.type==='edge'){
-          // Sınır bölgesi — en yakın bölgeyi göster ama doğruluğu uyar
           showResult(detection.region,true);
+        }else{
+          // Beklenmedik durum — fallback
+          console.warn('[Yerinde Lastik] Beklenmedik detection type:',detection);
+          showGpsError('Konum analizinde bir sorun oluştu.');
         }
       },
       err=>{
         gpsBtn.classList.remove('loading');
+        console.log('[Yerinde Lastik] HATA - kod:',err.code,'mesaj:',err.message);
         let msg='Konum izni alınamadı.';
         if(err.code===1)msg='Konum iznini reddettin. Tarayıcı adres çubuğundaki kilit/kalkan ikonundan izni sıfırlayıp tekrar deneyebilirsin.';
-        else if(err.code===2)msg='Konum servisi şu an çalışmıyor.';
-        else if(err.code===3)msg='Konum bulma süresi aşıldı.';
+        else if(err.code===2)msg='Konum servisi şu an çalışmıyor. GPS açık mı kontrol et.';
+        else if(err.code===3)msg='Konum bulma süresi aşıldı. Tekrar dene veya manuel seç.';
         showGpsError(msg);
       },
       {enableHighAccuracy:true,timeout:15000,maximumAge:60000}
