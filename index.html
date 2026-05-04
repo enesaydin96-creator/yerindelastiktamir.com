@@ -1896,9 +1896,9 @@ function showNearOutside(district,distanceKm){
   setTimeout(()=>result.scrollIntoView({behavior:'smooth',block:'nearest'}),100);
 }
 
-// ===== KONUM TESPİTİ =====
-// Strateji: Önce IP-based geolocation (tüm tarayıcılarda çalışır, izin gerektirmez),
-// başarısız olursa GPS fallback. Bu sayede Brave/Firefox privacy ayarları sorun olmaz.
+// ===== KONUM TESPİTİ (GPS) =====
+// Tarayıcının GPS API'si kullanılıyor. Kullanıcının izin vermesi gerekir.
+// İzin reddedilirse veya GPS çalışmazsa kullanıcı manuel dropdown'dan seçer.
 
 const gpsBtn=document.getElementById('gpsBtn');
 
@@ -1917,94 +1917,50 @@ function showGpsError(msg){
   setTimeout(()=>document.getElementById('dropdownWrap').classList.add('open'),800);
 }
 
-// IP-based geolocation — ücretsiz, izin gerektirmez, ~5 km doğruluk (ilçe seviyesi yeterli)
-// Birden fazla ücretsiz API var, fallback zinciri kuruyoruz
-async function getIpLocation(){
-  // Sıralı yedekler — biri çalışmazsa diğeri denenir
-  const providers=[
-    {url:'https://ipapi.co/json/', parse:d=>({lat:d.latitude,lng:d.longitude,city:d.city,country:d.country_code})},
-    {url:'https://ipwho.is/', parse:d=>d.success?({lat:d.latitude,lng:d.longitude,city:d.city,country:d.country_code}):null},
-    {url:'https://get.geojs.io/v1/ip/geo.json', parse:d=>({lat:parseFloat(d.latitude),lng:parseFloat(d.longitude),city:d.city,country:d.country_code})},
-  ];
-  for(const p of providers){
-    try{
-      console.log('[Yerinde Lastik] IP geolocation deneniyor:',p.url);
-      const ctrl=new AbortController();
-      const timeoutId=setTimeout(()=>ctrl.abort(),5000);
-      const resp=await fetch(p.url,{signal:ctrl.signal});
-      clearTimeout(timeoutId);
-      if(!resp.ok)continue;
-      const data=await resp.json();
-      const parsed=p.parse(data);
-      if(parsed && parsed.lat && parsed.lng && !isNaN(parsed.lat) && !isNaN(parsed.lng)){
-        console.log('[Yerinde Lastik] IP geolocation BAŞARILI:',parsed);
-        return parsed;
-      }
-    }catch(e){
-      console.log('[Yerinde Lastik] IP provider başarısız:',p.url,e.message);
-    }
-  }
-  return null;
-}
-
-// GPS fallback — IP başarısız olursa
-function tryGps(highAccuracy=false,timeoutMs=8000){
-  return new Promise((resolve,reject)=>{
-    if(!navigator.geolocation){reject(new Error('no-geo'));return;}
-    navigator.geolocation.getCurrentPosition(
-      pos=>resolve({lat:pos.coords.latitude,lng:pos.coords.longitude,accuracy:pos.coords.accuracy}),
-      reject,
-      {enableHighAccuracy:highAccuracy,timeout:timeoutMs,maximumAge:300000}
-    );
-  });
-}
-
 if(gpsBtn){
-  gpsBtn.addEventListener('click',async ()=>{
-    console.log('[Yerinde Lastik] Konum tespiti başladı');
-    gpsBtn.classList.add('loading');
+  gpsBtn.addEventListener('click',()=>{
+    console.log('[Yerinde Lastik] GPS başladı');
 
-    let coords=null;
-
-    // 1. ADIM: IP-based geolocation dene (hızlı, izin gerektirmez)
-    try{
-      coords=await getIpLocation();
-    }catch(e){console.log('[Yerinde Lastik] IP geolocation hata:',e);}
-
-    // 2. ADIM: IP başarısızsa GPS dene (yedek)
-    if(!coords){
-      console.log('[Yerinde Lastik] IP başarısız, GPS deneniyor...');
-      try{
-        coords=await tryGps(false,8000);
-        console.log('[Yerinde Lastik] GPS BAŞARILI:',coords);
-      }catch(e){
-        console.log('[Yerinde Lastik] GPS de başarısız:',e.code||e.message);
-      }
-    }
-
-    gpsBtn.classList.remove('loading');
-
-    if(!coords){
-      showGpsError('Konum tespit edilemedi.');
+    if(!navigator.geolocation){
+      showGpsError('Tarayıcın konum hizmetini desteklemiyor.');
       return;
     }
 
-    // Konum bulundu, hangi bölgede olduğunu kontrol et
-    const detection=detectLocation(coords.lat,coords.lng);
-    console.log('[Yerinde Lastik] Tespit:',detection.type,'koordinat:',coords.lat,coords.lng);
+    gpsBtn.classList.add('loading');
 
-    if(detection.type==='in-coverage'){
-      showResult(detection.region,true);
-    }else if(detection.type==='near-outside'){
-      showNearOutside(detection.district,detection.distance);
-    }else if(detection.type==='far-outside'){
-      showOutOfCoverage(detection.distance);
-    }else if(detection.type==='edge'){
-      showResult(detection.region,true);
-    }else{
-      console.warn('[Yerinde Lastik] Beklenmedik detection type:',detection);
-      showGpsError('Konum analizinde bir sorun oluştu.');
-    }
+    navigator.geolocation.getCurrentPosition(
+      pos=>{
+        gpsBtn.classList.remove('loading');
+        const detection=detectLocation(pos.coords.latitude,pos.coords.longitude);
+        console.log('[Yerinde Lastik] BAŞARILI - Konum:',pos.coords.latitude,pos.coords.longitude,'Doğruluk:',Math.round(pos.coords.accuracy)+'m','Sonuç:',detection.type);
+
+        if(detection.type==='in-coverage'){
+          showResult(detection.region,true);
+        }else if(detection.type==='near-outside'){
+          showNearOutside(detection.district,detection.distance);
+        }else if(detection.type==='far-outside'){
+          showOutOfCoverage(detection.distance);
+        }else if(detection.type==='edge'){
+          showResult(detection.region,true);
+        }else{
+          showGpsError('Konum analizinde bir sorun oluştu.');
+        }
+      },
+      err=>{
+        gpsBtn.classList.remove('loading');
+        console.log('[Yerinde Lastik] GPS HATASI - kod:',err.code,'mesaj:',err.message);
+        let msg='Konum alınamadı.';
+        if(err.code===1){
+          msg='Konum izni reddedildi. Tarayıcı adres çubuğundaki kilit/kalkan ikonundan izni "İzin Ver" olarak değiştirebilirsin.';
+        }else if(err.code===2){
+          msg='Konum servisi çalışmıyor. Cihazında GPS açık mı kontrol et.';
+        }else if(err.code===3){
+          msg='Konum bulma süresi aşıldı. Tarayıcın konum servisini kısıtlıyor olabilir.';
+        }
+        showGpsError(msg);
+      },
+      {enableHighAccuracy:true,timeout:15000,maximumAge:60000}
+    );
   });
 }
 
